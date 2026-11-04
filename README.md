@@ -98,8 +98,6 @@ A small, Logic-inspired digital audio workstation built on [JUCE](https://juce.c
 ### Mixer
 ![Mixer](docs/images/mixer.png)
 
-> **Image to add — `docs/images/mixer.png`:** The mixer strip row with a few tracks, one with an instrument plugin and one or two inserts, and the master channel visible on the right.
-
 ### Split into Stems
 ![Stem splitter](docs/images/stem-splitter.png)
 
