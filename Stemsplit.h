@@ -45,21 +45,21 @@ inline Result split(const float* x, int n, double sr, const Settings& s,
     const int pad = N, total = n + 2 * pad, frames = (total - N) / H + 2;
     std::vector<float> win((size_t) N); for (int i = 0; i < N; ++i) win[(size_t) i] = 0.5f - 0.5f * std::cos(2.f * 3.14159265f * (float) i / (float) N);
     const float olaNorm = 1.f / 1.5f;
-    std::vector<float> sig((size_t) frames * H + N, 0.f); std::copy(x, x + n, sig.begin() + pad);
-    std::vector<std::complex<float>> spec((size_t) frames * B), buf((size_t) N);
-    std::vector<float> mag((size_t) frames * B);
+    std::vector<float> sig((size_t) frames * (size_t) H + (size_t) N, 0.f); std::copy(x, x + n, sig.begin() + pad);
+    std::vector<std::complex<float>> spec((size_t) frames * (size_t) B), buf((size_t) N);
+    std::vector<float> mag((size_t) frames * (size_t) B);
     auto stop = [&] { return cancel != nullptr && cancel->load(); };
     for (int f = 0; f < frames; ++f) {
-        for (int i = 0; i < N; ++i) buf[(size_t) i] = { sig[(size_t) f * H + (size_t) i] * win[(size_t) i], 0.f };
+        for (int i = 0; i < N; ++i) buf[(size_t) i] = { sig[(size_t) f * (size_t) H + (size_t) i] * win[(size_t) i], 0.f };
         fft(buf, false);
-        for (int b = 0; b < B; ++b) { spec[(size_t) f * B + b] = buf[(size_t) b]; mag[(size_t) f * B + b] = std::abs(buf[(size_t) b]); }
+        for (int b = 0; b < B; ++b) { spec[(size_t) f * (size_t) B + (size_t) b] = buf[(size_t) b]; mag[(size_t) f * (size_t) B + (size_t) b] = std::abs(buf[(size_t) b]); }
         if ((f & 63) == 0) { if (progress) progress(0.15f * (float) f / (float) frames); if (stop()) return {}; } }
 
     const double frameSec = (double) H / sr, binHz = sr / (double) N;
     const int hT = std::max(1, (int) std::lround(s.harmSmoothMs / 1000.0 / frameSec / 2.0)), hF = std::max(1, (int) std::lround(s.percWidthHz / binHz / 2.0));
-    std::vector<float> Hm((size_t) frames * B), Pm((size_t) frames * B), tmp;
+    std::vector<float> Hm((size_t) frames * (size_t) B), Pm((size_t) frames * (size_t) B), tmp;
     for (int f = 0; f < frames; ++f) {
-        for (int b = 0; b < B; ++b) { Hm[(size_t) f * B + b] = medianAt(mag.data() + b, frames, B, f, hT, tmp); Pm[(size_t) f * B + b] = medianAt(mag.data() + (size_t) f * B, B, 1, b, hF, tmp); }
+        for (int b = 0; b < B; ++b) { Hm[(size_t) f * (size_t) B + (size_t) b] = medianAt(mag.data() + b, frames, B, f, hT, tmp); Pm[(size_t) f * (size_t) B + (size_t) b] = medianAt(mag.data() + (size_t) f * (size_t) B, B, 1, b, hF, tmp); }
         if ((f & 31) == 0) { if (progress) progress(0.15f + 0.55f * (float) f / (float) frames); if (stop()) return {}; } }
 
     auto lowCurve = [&](double fc) { std::vector<float> w((size_t) B); for (int b = 0; b < B; ++b) { const double hz = std::max(1.0, b * binHz); w[(size_t) b] = (float) (1.0 / (1.0 + std::pow(hz / fc, 6.0))); } return w; };
@@ -73,13 +73,13 @@ inline Result split(const float* x, int n, double sr, const Settings& s,
     { std::vector<float>().swap(Hm); std::vector<float>().swap(Pm); }
 
     auto synth = [&](auto&& mult, std::vector<float>& dst, float p0, float p1) {
-        std::vector<float> acc((size_t) frames * H + N, 0.f);
+        std::vector<float> acc((size_t) frames * (size_t) H + (size_t) N, 0.f);
         for (int f = 0; f < frames; ++f) {
-            for (int b = 0; b < B; ++b) { const size_t i = (size_t) f * B + b; buf[(size_t) b] = spec[i] * mult(i, b); }
+            for (int b = 0; b < B; ++b) { const size_t i = (size_t) f * (size_t) B + (size_t) b; buf[(size_t) b] = spec[i] * mult(i, b); }
             for (int b = 1; b < N / 2; ++b) buf[(size_t) (N - b)] = std::conj(buf[(size_t) b]);
             buf[(size_t) (N / 2)].imag(0.f); buf[0].imag(0.f);
             fft(buf, true);
-            for (int i = 0; i < N; ++i) acc[(size_t) f * H + (size_t) i] += buf[(size_t) i].real() * win[(size_t) i];
+            for (int i = 0; i < N; ++i) acc[(size_t) f * (size_t) H + (size_t) i] += buf[(size_t) i].real() * win[(size_t) i];
             if ((f & 63) == 0 && progress) progress(p0 + (p1 - p0) * (float) f / (float) frames); }
         dst.assign(acc.begin() + pad, acc.begin() + pad + n); for (auto& v : dst) v *= olaNorm; };
     const int nOut = s.zones ? (int) s.drums + (int) s.bass + (int) s.guitar + (int) s.piano + (int) s.vocals + (int) s.other : (int) s.drums + (int) s.bass + (int) s.melody;
