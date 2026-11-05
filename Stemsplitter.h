@@ -1,6 +1,6 @@
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
-#include "StemSplit.h"
+#include "Stemsplit.h"
 using namespace juce;
 namespace stemui {
 constexpr int kNumStems = 6;      
