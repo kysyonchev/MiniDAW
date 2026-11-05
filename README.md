@@ -7,7 +7,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)]()
 [![GitHub stars](https://img.shields.io/github/stars/kysyonchev/MiniDAW?style=social)](https://github.com/kysyonchev/MiniDAW)
 
-A small, Logic-inspired digital audio workstation built on [JUCE](https://juce.com/). It has an arrangement timeline, a piano roll, a mixer, instrument and audio tracks, VST3/AU hosting, a metronome, a tuner, and a stem splitter — either a built-in FFT engine or [Demucs](https://github.com/facebookresearch/demucs) running on your machine.
+A small, Logic-inspired digital audio workstation built on [JUCE](https://juce.com/). It has an arrangement timeline, a piano roll, a mixer with per-channel EQ and a reverb send, instrument and audio tracks, VST3/AU hosting, markers, a flexible export system (mixdown, per-track stems, MIDI), a metronome, a tuner, and a stem splitter — either a built-in FFT engine or [Demucs](https://github.com/facebookresearch/demucs) running on your machine.
 
 ![Main window](docs/images/main-window.png)
 
@@ -21,6 +21,7 @@ A small, Logic-inspired digital audio workstation built on [JUCE](https://juce.c
 - [Running the tests](#running-the-tests)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Project files](#project-files)
+- [Export and bounce](#export-and-bounce)
 - [Split into Stems](#split-into-stems)
 - [Project structure](#project-structure)
 - [Status and limitations](#status-and-limitations)
@@ -33,9 +34,21 @@ A small, Logic-inspired digital audio workstation built on [JUCE](https://juce.c
 
 ### Timeline and editing
 - Bar / beat arrangement view with a ruler, per-track lanes and colour-coded regions.
-- Instrument and audio tracks, M / S / R buttons per lane, per-track colour palette.
+- Track headers stay pinned on the left while you scroll the timeline horizontally.
+- Instrument and audio tracks, M / S / R buttons per lane.
+- **Track colour and icon picker** — 16 preset colours plus a free colour selector, and 8 icons (waveform, keys, drum, guitar, mic, note, sine, saw) or automatic. Open it by clicking the icon in a track header, or from the track / mixer context menus.
 - Region drag, delete, duplicate, and snap to bar / beat / half beat / off.
 - Undo / redo (up to 100 steps) for region edits, plus **Split at playhead**, **Quantize**, **Transpose** and **Set / humanize velocity** from the Edit menu.
+- **Region tools:** cut / copy / paste at the playhead, mute / unmute, nudge left / right by the snap grid, repeat region N times, select next / previous region.
+- **Audio region tools:** fade in / fade out (1/4 beat to 2 beats, drawn on the region and applied on playback), normalize, reverse.
+
+### Loop, markers and navigation
+- **Draggable loop range** in the ruler: drag the middle to move it, drag either edge to resize, snapped to the grid.
+- **Markers:** create at the playhead, rename, delete, jump to any marker from a list, or step to the previous / next marker. Markers are drawn as flags in the ruler and you can click one to jump to it.
+- **Navigate menu:** previous / next bar, go to beginning / end / loop start / selected region start, previous / next track.
+- **Loop tools:** set loop to region, loop one bar at the playhead, double / halve the loop length, move the loop forward or back.
+- **Project notes** saved with the project (File menu).
+- **Zoom to fit** the whole project, plus toggles for showing waveforms and notes inside regions.
 
 ### Piano roll
 - Click to add a note, drag to move, drag the right edge to resize, right-click to delete.
@@ -51,9 +64,12 @@ A small, Logic-inspired digital audio workstation built on [JUCE](https://juce.c
 - Plugin manager with a background scanner, search, and a per-format list.
 
 ### Mixer
-- Logic-style channel strip per track: pan, fader, level meter with peak hold, M / S / R / I buttons, plugin slots.
-- Master channel with its own inserts, balance, fader, mute, soft limiter and stereo meters.
+- Logic-style channel strip per track: EQ box, input / instrument slot, four insert slots, reverb send, pan, fader with tick marks, dB scale, level meter with peak hold, R / I / M / S buttons and the track name.
+- **Per-channel 4-band EQ** (low shelf, two peaking bands, high shelf) that runs before the inserts. The EQ box on the strip shows the live curve; click it to open an editor with draggable points (drag for frequency and gain, scroll for width, double-click to reset a band) with On and Reset buttons.
+- **Reverb send bus:** every strip has a send knob feeding a shared reverb. Room size, damping and return level are set in Options > Reverb Bus Settings.
+- Master channel with its own inserts, **master EQ**, balance, fader, mute, soft limiter and stereo meters.
 - Track level meters and master peak hold use the same dB scale as the faders.
+- Reset all faders and pans from the Track menu.
 
 ### Audio recording
 - Lock-free recording on the audio thread — never writes past its buffer.
@@ -77,8 +93,10 @@ A small, Logic-inspired digital audio workstation built on [JUCE](https://juce.c
 ### Import and export
 - Drag audio files (WAV, AIFF, FLAC, MP3, M4A, OGG) from Finder / Explorer onto the arrangement — they land where you drop them, snapped to a quarter beat, on an existing audio track or a new one.
 - Import any supported format as a region with a single shortcut.
-- Bounce the full project to **WAV (16 / 24 / 32-bit float)**, **AIFF (16 / 24-bit)** or **FLAC (16 / 24-bit)**, or export just the last recorded take.
-- Optional normalisation to −1 dBFS on export.
+- **Import MIDI files:** each MIDI track becomes an instrument track with its notes (see [Export and bounce](#export-and-bounce)).
+- Full export dialog with mixdown, per-track stems, region or track only, range, format, sample rate and more — see [Export and bounce](#export-and-bounce).
+- **Export MIDI files** for the selected track or all instrument tracks.
+- **Bounce Track in Place** renders a track to a new audio track.
 
 ### Stems
 - Built-in Quick Split (harmonic / percussive + pitch zones, no external tools) or AI Split via Demucs.
@@ -131,6 +149,8 @@ cd MiniDAW
 ```
 
 The first CMake configure downloads JUCE from GitHub, which takes a few minutes. Subsequent builds are incremental.
+
+File names are case-sensitive on Linux, so keep the stem splitter headers named exactly `Stemsplitter.h` and `Stemsplit.h`.
 
 ### Build commands per OS
 
@@ -200,6 +220,8 @@ The tests cover:
 - Tuner note math and YIN pitch detection (sine, harmonic-rich tones, silence, noise, below noise floor)
 - Quick Split (3-stem and 6-stem zones mode) and stem cancellation
 
+The EQ, reverb send, export, markers and MIDI import / export live in the app code and are not covered by the unit tests yet.
+
 ---
 
 ## Keyboard shortcuts
@@ -211,15 +233,25 @@ The tests cover:
 | K | Metronome on / off |
 | C | Cycle (loop) on / off |
 | T | Tap tempo |
+| M | Mute selected track |
+| S | Solo selected track |
 | X | Toggle mixer |
 | I | Toggle inspector |
 | P | Toggle piano roll |
 | U | Toggle tuner |
 | + / - | Zoom timeline |
+| Z | Zoom to fit project |
 | Return | Go to start |
+| , / . | Previous / next bar |
+| ' | Create marker at playhead |
+| [ / ] | Previous / next marker |
+| Up / Down | Select previous / next track (in the arrangement) |
+| Tab / Shift+Tab | Select next / previous region |
 | D | Duplicate selected region |
 | Q | Quantize selected region to 1/16 |
 | Delete | Delete selected region |
+| Opt+Left / Right | Nudge selected region |
+| Cmd/Ctrl+X / C / V | Cut / copy / paste region |
 | Cmd/Ctrl+Z | Undo |
 | Shift+Cmd/Ctrl+Z | Redo |
 | Cmd/Ctrl+T | Split region at playhead |
@@ -258,7 +290,43 @@ A `.mdp` file is a gzip-compressed container with:
 - the project XML (tracks, notes, mixer state, plugin state, master settings)
 - each unique audio take stored once as raw float data
 
+The project XML also stores the channel and master EQ settings, track icons, reverb sends and reverb bus settings, region mutes and fades, markers and project notes. Projects saved before these features existed open with sensible defaults for all of them.
+
 Regions that reference the same take share the same blob, so a clip duplicated several times doesn't cost extra disk. The reader is backward-compatible: if the file starts with `<` it is treated as an older plain-XML project and opened directly.
+
+---
+
+## Export and bounce
+
+**File > Export / Bounce...** (Cmd/Ctrl+E) opens the export dialog. The File menu also has shortcuts for exporting the selected track, all tracks as separate files, or the selected region.
+
+### What to export
+- **Project mixdown** — everything through the master chain.
+- **Each track as a separate file (stems)** — one file per track, optionally skipping muted tracks.
+- **Mixdown + each track separately** — both in one go.
+- **Selected region only** or **selected track only**.
+- **Recorded take** — the last audio take, as before.
+
+Stems are rendered per track with that track's EQ, fader, plugins and reverb send, through the master chain. Every stem uses the same range, so the files line up when you import them into another DAW. Files are named like `Project - 01 Track name.wav`.
+
+### Settings
+- **Range:** whole project, loop range or selected region.
+- **Format:** WAV, AIFF or FLAC, at 16-bit, 24-bit or 32-bit float (32-bit float is WAV only).
+- **Sample rate:** project rate, 44.1, 48, 88.2 or 96 kHz (the audio is resampled on export).
+- **Channels:** stereo or mono.
+- **Normalize:** off, peak to −1 dB or peak to −0.1 dB.
+- **Tail:** none, 1, 2, 4 or 8 seconds, so reverb and delay tails ring out.
+- **Dither** when exporting 16-bit, and **trim silence** at the end.
+- File name, and whether to show the files in Finder / Explorer when finished.
+
+A progress window shows while exporting. Closing it cancels the remaining files. The dialog's settings are not remembered between exports.
+
+### MIDI
+- **Import MIDI File...** turns each MIDI track into an instrument track. The file's tempo is applied only if the project has no regions yet.
+- **Export Selected Track / All Tracks as MIDI File...** writes a standard multi-track MIDI file with tempo and time signature.
+
+### Bounce Track in Place
+**Track > Bounce Track in Place** renders the selected track to a new audio track (mono mixdown including its EQ, fader and plugins) and mutes the original.
 
 ---
 
@@ -301,6 +369,10 @@ This is a personal project, not a Logic or Reaper replacement. A few things to b
 - The built-in synth is simple. One filter per track, no envelopes beyond attack and release, no modulation.
 - No undo for mixer moves. Undo covers region edits (dragging, deleting, splitting, duplicating).
 - No time stretching or pitch shifting. Audio regions play at the project tempo at their recorded rate.
+- No automation, track stacks or flex time.
+- There is a single shared reverb send bus, and the master channel has an EQ but no EQ box on its strip (open it from Options > Master EQ).
+- Bounce Track in Place produces a mono track, and MIDI files with SMPTE timing are not supported on import.
+- Exports are WAV, AIFF or FLAC only; there is no MP3 or Ogg export.
 
 ---
 
