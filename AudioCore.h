@@ -52,7 +52,7 @@ inline float detectPitch(const float* x, int n, double sr, float fmin = 28.f, fl
     const int W = n - tauMax; std::vector<float> d((size_t) tauMax + 2, 0.f);
     for (int t = 1; t <= tauMax; ++t) { double s = 0.0; for (int j = 0; j < W; ++j) { const double q = (double) x[j] - (double) x[j + t]; s += q * q; } d[(size_t) t] = (float) s; }
     d[0] = 1.f; double run = 0.0;
-    for (int t = 1; t <= tauMax; ++t) { run += d[(size_t) t]; d[(size_t) t] = run > 0.0 ? (float) (d[(size_t) t] * t / run) : 1.f; }
+    for (int t = 1; t <= tauMax; ++t) { run += d[(size_t) t]; d[(size_t) t] = run > 0.0 ? (float) ((double) d[(size_t) t] * (double) t / run) : 1.f; }
     int tau = -1;
     for (int t = tauMin; t < tauMax; ++t) if (d[(size_t) t] < thresh) { while (t + 1 < tauMax && d[(size_t) t + 1] < d[(size_t) t]) ++t; tau = t; break; }
     if (tau < 0) return 0.f;
