@@ -1,6 +1,6 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "AudioCore.h"
-#include "StemSplitter.h"     
+#include "Stemsplitter.h"     
 using namespace juce;
 struct Note { double start, len; int pitch; int vel = 100; };
 struct Clip {
