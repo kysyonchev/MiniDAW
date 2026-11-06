@@ -1,4 +1,4 @@
-# MiniDAW
+# MiniDAW v1.2.9
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
@@ -103,6 +103,11 @@ A small, Logic-inspired digital audio workstation built on [JUCE](https://juce.c
 - Ticked stems each become their own track, everything else is mixed into a single "Rest" track, so the stems always add back up to the original.
 - Demucs can be set up and its models downloaded from inside the app — no terminal required.
 
+### Integrated Amp Simulator
+- A built-in guitar amp, cabinet and pedalboard that lives inside MiniDAW as a per-track insert.
+- It appears in the plugin slot menu as "Amp Sim (built-in)" — no VST/AU, no scanning.
+- Drop it on any audio track, toggle it on/off, open the full editor on double-click.
+
 ---
 
 ## Screenshots
@@ -115,6 +120,9 @@ A small, Logic-inspired digital audio workstation built on [JUCE](https://juce.c
 
 ### Mixer
 ![Mixer](docs/images/mixer.png)
+
+### Amp Simulator
+![Amp Simulator](docs/images/AmpSim.png)
 
 ### Split into Stems
 ![Stem splitter](docs/images/stem-splitter.png)
@@ -330,6 +338,11 @@ A progress window shows while exporting. Closing it cancels the remaining files.
 
 ---
 
+### Amp Sim
+- Working Amplifier Simulator with popular amp heads, cab simulation and pedalboard simulation with popular gear.
+
+---
+
 ## Split into Stems
 
 Two engines, both starting from the same idea: ticked stems each become a new track, unticked stems are summed into one extra "Rest" track.
@@ -386,3 +399,6 @@ Released under the MIT License. See [LICENSE](LICENSE) for the full text.
 
 - [JUCE](https://juce.com/) — the framework the whole app is built on.
 - [Demucs](https://github.com/facebookresearch/demucs) by Meta Research — the AI stem separation model.
+
+## Notice
+- In my editor the code has a lot of errors and warnings but still compiles.
