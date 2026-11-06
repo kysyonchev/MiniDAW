@@ -1,6 +1,9 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "AudioCore.h"
 #include "Stemsplitter.h"     
+#include "AmpSim.h"
+#include "AmpSimPanel.h"
+
 using namespace juce;
 struct Note { double start, len; int pitch; int vel = 100; };
 struct Clip {
@@ -34,6 +37,11 @@ struct Track {
     bool audio = false, armed = false; int inCh = 0; std::atomic<bool> live[128] {}; MidiMessageCollector coll;
     std::unique_ptr<AudioPluginInstance> plugin;            
     std::unique_ptr<AudioPluginInstance> fx[4];
+    std::unique_ptr<ampsim::AmpSimProcessor> ampSim;   // built-in amp / cab / pedalboard
+    int  ampSimSlot = -1;                              // which fx slot (0..3) is occupied by the amp sim
+    bool hasAmp(int s) const { return ampSim != nullptr && ampSimSlot == s; }
+    bool slotUsed(int s) const { return s < 0 ? plugin != nullptr : (fx[s] != nullptr || hasAmp(s)); }
+    String fxLabel(int s, int maxLen) const { return fx[s] ? fx[s]->getName().substring(0, maxLen) : hasAmp(s) ? String("Amp Sim").substring(0, maxLen) : String(); }
     EqBand eq[4] { EqBand(80.f), EqBand(400.f), EqBand(2500.f), EqBand(9000.f) }; bool eqOn = true; int icon = 0; float send = 0.f; Biquad bq[4];   // channel EQ: low shelf, 2 peaks, high shelf
     static int eqType(int k) { return k == 0 ? 0 : k == 3 ? 2 : 1; }
     double eqDb(double hz, double sr) const { double sum = 0; for (int k = 0; k < 4; ++k) { if (std::abs(eq[k].gain) < 0.01f) continue; Biquad b; b.set(eqType(k), sr, eq[k].freq, eq[k].gain, eq[k].q); sum += b.magDb(hz, sr); } return sum; }              
@@ -169,7 +177,7 @@ struct Engine {
             else if (t.wave == 10) drums(t, on, n, sr);
             else synth(t, on, n, sr);
             eqBlock(t, view.getWritePointer(0), view.getWritePointer(1), n, sr);
-            for (auto& f : t.fx) if (f) f->processBlock(view, none);          
+            for (int s = 0; s < 4; ++s) { if (t.fx[s]) t.fx[s]->processBlock(view, none); else if (t.hasAmp(s)) t.ampSim->process(view.getWritePointer(0), view.getWritePointer(1), n); }          
             const bool audible = ! t.mute && (! anySolo || t.solo);
             const float V = audible ? t.vol : 0.f, L = V * (1.f - jmax(0.f, t.pan)), R = V * (1.f + jmin(0.f, t.pan)); float peak = 0;
             for (int i = 0; i < n; ++i) { const float l = view.getSample(0, i), r = view.getSample(1, i);
@@ -770,14 +778,14 @@ struct MixerStrip : Component, Timer {
         mon.onClick = [this] { ScopedLock sl(p.lock); t.monitor = mon.getToggleState(); };
         slot[0].setButtonText(t.audio ? String("Input ") + String(t.inCh + 1) : t.plugin ? t.plugin->getName().substring(0, 12) : String(Project::presets[t.preset].name));
         slot[0].setColour(TextButton::buttonColourId, t.audio ? Colour(0xff58595e) : Colour(0xff4a62b0));
-        for (int i = 0; i < 4; ++i) { slot[i + 1].setButtonText(t.fx[i] ? t.fx[i]->getName().substring(0, 7) : String()); slot[i + 1].setColour(TextButton::buttonColourId, t.fx[i] ? Colour(0xff3f7f5a) : Colour(0xff2f3034)); }
+        for (int i = 0; i < 4; ++i) { slot[i + 1].setButtonText(t.fxLabel(i, 7)); slot[i + 1].setColour(TextButton::buttonColourId, t.hasAmp(i) ? Colour(0xffb5651d) : t.fx[i] ? Colour(0xff3f7f5a) : Colour(0xff2f3034)); }
         for (int i = 0; i < 5; ++i) { slot[i].onClick = [this, i] { if (! loaded(i) && onSlot) onSlot(i - 1); }; slot[i].addMouseListener(this, false); addAndMakeVisible(slot[i]); }
         for (Component* c : std::initializer_list<Component*> { &name, &vol, &pan, &sendK, &m, &s, &arm, &mon }) addAndMakeVisible(c);
         mon.setVisible(t.audio);
         for (auto* c : getChildren()) { c->setWantsKeyboardFocus(false); c->setMouseClickGrabsKeyboardFocus(false); }       
         startTimerHz(30);
     }
-    bool loaded(int i) const { return i == 0 ? t.plugin != nullptr : t.fx[i - 1] != nullptr; }
+    bool loaded(int i) const { return t.slotUsed(i - 1); }
     int slotOf(const MouseEvent& e) const { for (int i = 0; i < 5; ++i) if (e.eventComponent == &slot[i]) return i; return -1; }
     void openLook() { CallOutBox::launchAsynchronously(std::make_unique<TrackLook>(p, t), localAreaToGlobal(name.getBounds()), nullptr); }
     void openEq() { CallOutBox::launchAsynchronously(std::make_unique<EqEditor>(p, t), localAreaToGlobal(eqR), nullptr); }
@@ -1338,7 +1346,7 @@ struct PluginManagerPanel : Component, Thread, ChangeListener, Timer {
     void run() override {
         const int n = jmax(1, fm.getNumFormats()); PluginDirectoryScanner::applyBlacklistingsFromDeadMansPedal(known, dead);
         for (int i = 0; i < fm.getNumFormats() && ! threadShouldExit(); ++i) {
-            auto* fmt = fm.getFormat(i); PluginDirectoryScanner sc(known, *fmt, fmt->getDefaultLocationsToSearch(), true, dead, false); String name;
+            auto* fmt = fm.getFormat(i); PluginDirectoryScanner sc(known, *fmt, fmt->getDefaultLocationsToSearch(), true, dead, true); String name;
             while (! threadShouldExit()) { frac = ((float) i + sc.getProgress()) / (float) n; if (! sc.scanNextFile(true, name)) break; const ScopedLock sl(cs); current = fmt->getName() + ": " + name; } }
         MessageManager::callAsync([safe = Component::SafePointer<PluginManagerPanel>(this)] { if (safe != nullptr) safe->scanFinished(); }); }
     void timerCallback() override { const ScopedLock sl(cs); cl.progress = frac; cl.subtitle = current.isEmpty() ? String("Scanning...") : "Scanning " + current; cl.repaint(); }
@@ -1466,7 +1474,7 @@ struct StartScreen : Component, ListBoxModel {
         { const auto lg = Rectangle<float>(20.f, 24.f, 44.f, 44.f); g.setGradientFill(ColourGradient(Colour(0xfff4f4f6), lg.getX(), lg.getY(), Colour(0xffa6a7af), lg.getRight(), lg.getBottom(), false)); g.fillRoundedRectangle(lg, 11.f);
           g.setColour(Colour(0xff1d1e22)); static const float hs[5] = { 10.f, 22.f, 30.f, 16.f, 8.f }; for (int k = 0; k < 5; ++k) g.fillRoundedRectangle(lg.getX() + 8.f + (float) k * 6.f, lg.getCentreY() - hs[k] * 0.5f, 3.6f, hs[k], 1.8f);
           g.setColour(Colour(0xfff2f2f5)); g.setFont(Font(FontOptions(20.f, Font::bold))); g.drawText("MiniDAW", 74, 24, sideW - 84, 26, Justification::centredLeft, false);
-          g.setColour(Colour(0xff8a8b93)); g.setFont(Font(FontOptions(12.f))); g.drawText("Version 1.2.2", 74, 48, sideW - 84, 18, Justification::centredLeft, false); }
+          g.setColour(Colour(0xff8a8b93)); g.setFont(Font(FontOptions(12.f))); g.drawText("Version 1.2.9", 74, 48, sideW - 84, 18, Justification::centredLeft, false); }
         { static const char* labels[7] = { "New Project", "Recent Projects", "Open Project...", "Open Auto-save Backup", "Settings", "Audio / MIDI", "Plug-in Manager" };
           g.setColour(Colour(0xff6b6c73)); g.setFont(Font(FontOptions(10.5f, Font::bold))); g.drawText("PROJECTS", 22, 90, 120, 16, Justification::centredLeft, false); g.drawText("SETTINGS", 22, navR[4].getY() - 22, 120, 16, Justification::centredLeft, false);
           for (int i = 0; i < 7; ++i) { const auto r = navR[i]; const bool act = (i == 0 && tab == NewTab) || (i == 1 && tab == RecentTab);
@@ -1550,7 +1558,7 @@ struct MainComponent : AudioAppComponent, Timer, MidiInputCallback, ChangeListen
         insp.onDelete = [this] { deleteTrack(p.selTrack); };
         masterStrip.onSlot = [this](int s) { slotMenu(p.masterTrack, s); }; masterStrip.onOpen = [this](int s) { openEditor(p.masterTrack.fx[(size_t) s].get()); };
         metro.addMouseListener(this, false);        
-        mix.onOpen = insp.onOpen = [this](Track& t, int s) { openEditor((s < 0 ? t.plugin : t.fx[s]).get()); };
+        mix.onOpen = insp.onOpen = [this](Track& t, int s) { if (s >= 0 && t.hasAmp(s)) openAmpSim(t); else openEditor((s < 0 ? t.plugin : t.fx[s]).get()); };
         arr.onCmd = [this](int id) { doMenu(id); };
         arr.onMenu = [this](int ti) { PopupMenu m; m.addItem(1, "Record Enable"); m.addItem(3, "Color & Icon..."); m.addSeparator(); m.addItem(2, "Delete Track");
             m.showMenuAsync(PopupMenu::Options(), [this, ti](int r) { if (ti >= (int) p.tracks.size()) return;
@@ -1857,6 +1865,9 @@ struct MainComponent : AudioAppComponent, Timer, MidiInputCallback, ChangeListen
         mixh(p.bpm); mixh((double) p.beatsPerBar.load()); mixh((double) p.master.load()); mixh((double) p.tracks.size()); mixh((double) p.markers.size()); for (auto& mk : p.markers) { mixh(mk.first); mixh((double) mk.second.hashCode64()); } mixh((double) p.notes.hashCode64()); mixh((double) p.revRoom.load()); mixh((double) p.revDamp.load()); mixh((double) p.revReturn.load());
         for (auto& tp : p.tracks) { auto& t = *tp; mixh((double) t.name.hashCode64()); mixh((double) t.send); mixh((double) t.icon); mixh(t.eqOn ? 1.0 : 0.0); for (auto& bd : t.eq) { mixh((double) bd.freq); mixh((double) bd.gain); mixh((double) bd.q); } mixh((double) t.vol); mixh((double) t.pan); mixh(t.mute ? 1.0 : 0.0); mixh(t.solo ? 1.0 : 0.0); mixh((double) t.preset);
             mixh((double) t.cutoff); mixh((double) t.atk); mixh((double) t.rel); mixh((double) t.colour.getARGB()); mixh((double) t.clips.size());
+            if (t.ampSim) { auto& a = t.ampSim->params; mixh((double) t.ampSimSlot); mixh(t.ampSim->enabled ? 1.0 : 0.0);
+                for (double v : { (double) a.input_gain, (double) a.drive, (double) a.asym, (double) a.bass_db, (double) a.mid_db, (double) a.treble_db, (double) a.cab_res_db, (double) a.cab_lp_hz, (double) a.presence_db, (double) a.master, a.noise_gate_enabled ? 1.0 : 0.0, (double) a.noise_gate_thresh_db, (double) a.voice, (double) a.tight, (double) a.sag, (double) a.mic, (double) a.reverb }) mixh(v);
+                for (auto& pd : t.ampSim->pedalboard.pedals) { mixh((double) (int) pd->kind); mixh(pd->enabled ? 1.0 : 0.0); mixh(pd->post ? 1.0 : 0.0); std::vector<std::pair<std::string, double>> kv(pd->params.begin(), pd->params.end()); std::sort(kv.begin(), kv.end()); for (auto& q : kv) mixh(q.second); } }
             for (auto& c : t.clips) { mixh(c.start); mixh(c.len); mixh(c.wav ? (double) c.wav->size() : -1.0); for (auto& n : c.notes) { mixh(n.start); mixh(n.len); mixh((double) n.pitch); mixh((double) n.vel); } } }
         return h; }
     void updateDirty() { const bool d = signature() != savedSig; if (d != dirty) { dirty = d; setTitle(); } }
@@ -1896,7 +1907,9 @@ struct MainComponent : AudioAppComponent, Timer, MidiInputCallback, ChangeListen
         hideStart(); refreshAll(); }
     void duplicateTrack() {
         auto* t = selT(); if (! t) return; ScopedLock l(p.lock); auto nt = std::make_unique<Track>(); nt->name = t->name + " copy"; nt->audio = t->audio; nt->colour = t->colour;
-        nt->vol = t->vol; nt->pan = t->pan; Project::applyPreset(*nt, t->preset); nt->wave = t->wave; nt->cutoff = t->cutoff; nt->atk = t->atk; nt->rel = t->rel; nt->clips = t->clips; nt->eqOn = t->eqOn; nt->icon = t->icon; nt->send = t->send; for (int k = 0; k < 4; ++k) nt->eq[k] = t->eq[k]; nt->coll.reset(p.sr); p.tracks.push_back(std::move(nt));
+        nt->vol = t->vol; nt->pan = t->pan; Project::applyPreset(*nt, t->preset); nt->wave = t->wave; nt->cutoff = t->cutoff; nt->atk = t->atk; nt->rel = t->rel; nt->clips = t->clips; nt->eqOn = t->eqOn; nt->icon = t->icon; nt->send = t->send; for (int k = 0; k < 4; ++k) nt->eq[k] = t->eq[k]; nt->coll.reset(p.sr);
+        if (t->ampSim) { nt->ampSim = std::make_unique<ampsim::AmpSimProcessor>(*t->ampSim); nt->ampSimSlot = t->ampSimSlot; }
+        p.tracks.push_back(std::move(nt));
         p.undoS.clear(); p.redoS.clear(); p.selTrack = (int) p.tracks.size() - 1; p.selClip = -1; refreshAll();
     }
     void renameTrack() {
@@ -2105,6 +2118,7 @@ struct MainComponent : AudioAppComponent, Timer, MidiInputCallback, ChangeListen
                 for (int s = -1; s < 4; ++s) { auto* pl = s < 0 ? t.plugin.get() : t.fx[s].get(); if (! pl) continue;
                     auto* pe = e->createNewChildElement("SLOT"); pe->setAttribute("slot", s); if (auto d = pl->getPluginDescription().createXml()) pe->addChildElement(d.release());
                     MemoryBlock mb; pl->getStateInformation(mb); pe->setAttribute("state", mb.toBase64Encoding()); }
+                if (t.ampSim) { auto* ae = e->createNewChildElement("AMPSIM"); ae->setAttribute("slot", t.ampSimSlot); ampsim_io::toXml(*t.ampSim, *ae); }
                 for (auto& c : t.clips) { if (c.rec) continue; auto* ce = e->createNewChildElement("CLIP"); ce->setAttribute("start", c.start); ce->setAttribute("len", c.len); ce->setAttribute("mute", c.mute ? 1 : 0); ce->setAttribute("fadeIn", c.fadeIn); ce->setAttribute("fadeOut", c.fadeOut);
                     if (c.wav) { int id = -1; for (size_t i = 0; i < blobs.size(); ++i) if (blobs[i] == c.wav) id = (int) i;
                         if (id < 0) { id = (int) blobs.size(); blobs.push_back(c.wav); } ce->setAttribute("blob", id); ce->setAttribute("sr", c.wavSr); }
@@ -2164,6 +2178,9 @@ struct MainComponent : AudioAppComponent, Timer, MidiInputCallback, ChangeListen
                     if (bi >= 0 && bi < (int) blobs.size()) { c.wav = blobs[(size_t) bi]; c.wavSr = ce->getDoubleAttribute("sr", 44100); core::updatePeaks(c.wav->data(), (int) c.wav->size(), c.peaksDone, c.peaks); core::finishPeaks(c.wav->data(), (int) c.wav->size(), c.peaksDone, c.peaks); }
                     for (auto* ne : ce->getChildWithTagNameIterator("N")) c.notes.push_back({ ne->getDoubleAttribute("s"), ne->getDoubleAttribute("l"), ne->getIntAttribute("p"), jlimit(1, 127, ne->getIntAttribute("v", 100)) });
                     t->clips.push_back(c); }
+                if (auto* ae = e->getChildByName("AMPSIM")) {
+                    auto ap = std::make_unique<ampsim::AmpSimProcessor>(); ampsim_io::fromXml(*ap, *ae); ap->prepare(p.sr);
+                    t->ampSimSlot = jlimit(0, 3, ae->getIntAttribute("slot", 0)); t->ampSim = std::move(ap); }
                 t->coll.reset(p.sr); p.tracks.push_back(std::move(t)); }
             p.selTrack = p.tracks.empty() ? -1 : 0; p.selClip = -1; p.beat = 0; }
         projFile = f; tempo.setValue(p.bpm, dontSendNotification); int ti = 0;
@@ -2330,6 +2347,10 @@ struct MainComponent : AudioAppComponent, Timer, MidiInputCallback, ChangeListen
         { ScopedLock l(p.lock); p.undoS.clear(); p.redoS.clear(); p.tracks.erase(p.tracks.begin() + i); p.selClip = -1; p.recTrack = p.recClip = -1; p.selTrack = jmin(i, (int) p.tracks.size() - 1); }
         refreshAll();
     }
+    void openAmpSim(Track& t) {
+        pwin.reset(); if (! t.ampSim) return;
+        pwin = std::make_unique<PluginWindow>(new AmpSimPanel(*t.ampSim, p.lock, t.name), "Amp Sim - " + t.name);
+    }
     void openEditor(AudioPluginInstance* pl) {
         pwin.reset(); if (! pl) return;
         auto* e = pl->hasEditor() ? pl->createEditorIfNeeded() : new GenericAudioProcessorEditor(*pl);
@@ -2342,18 +2363,23 @@ struct MainComponent : AudioAppComponent, Timer, MidiInputCallback, ChangeListen
         if (! isIn) { std::vector<int> order; for (int i = 0; i < types.size(); ++i) if (types[i].isInstrument == (slot < 0)) order.push_back(i);
             std::sort(order.begin(), order.end(), [&types](int a, int b) { return types[a].name.compareIgnoreCase(types[b].name) < 0; });
             for (int i : order) { PickItem it; it.id = idx.size() + 1; it.name = types[i].name; it.sub = types[i].manufacturerName; it.badge = types[i].pluginFormatName; it.chip = 2; items.push_back(it); idx.add(i); } }
-        std::vector<std::pair<String, int>> acts; if (cur) { acts.push_back({ "Open Editor", 9001 }); acts.push_back({ "Remove", 9000 }); } acts.push_back({ "Scan for Plug-ins...", 9002 });
+        const bool ampOk = slot >= 0 && &t != &p.masterTrack, ampHere = ampOk && t.hasAmp(slot);
+        std::vector<std::pair<String, int>> acts; if (cur || ampHere) { acts.push_back({ "Open Editor", 9001 }); acts.push_back({ "Remove", 9000 }); } acts.push_back({ "Scan for Plug-ins...", 9002 });
         const StringArray chips = isIn ? StringArray() : slot < 0 ? StringArray { "All", "Built-in", "Plug-ins" } : StringArray { "All", "Plug-ins" };
         if (slot >= 0) for (auto& it : items) it.chip = 1;
-        showPicker(isIn ? "Input" : slot < 0 ? "Instrument" : "Insert " + String(slot + 1), std::move(items), chips, std::move(acts), [this, &t, &cur, types, idx](int r) {
-            if (r == 0) return; if (r == 9002) { scan.triggerClick(); return; } if (r == 9001) { openEditor(cur.get()); return; }
+        if (ampOk) { PickItem it; it.id = 7000; it.name = "Amp Sim"; it.sub = "Amp, cabinet and pedalboard"; it.badge = "Built-in"; it.ticked = ampHere; it.chip = 1; items.insert(items.begin(), it); }
+        showPicker(isIn ? "Input" : slot < 0 ? "Instrument" : "Insert " + String(slot + 1), std::move(items), chips, std::move(acts), [this, &t, &cur, slot, types, idx](int r) {
+            if (r == 0) return; if (r == 9002) { scan.triggerClick(); return; } if (r == 9001) { if (slot >= 0 && t.hasAmp(slot)) openAmpSim(t); else openEditor(cur.get()); return; }
             pwin.reset();
-            if (r == 9000) { { ScopedLock l(p.lock); cur.reset(); } refreshAll(); return; }
+            if (r == 9000) { { ScopedLock l(p.lock); cur.reset(); if (slot >= 0 && t.hasAmp(slot)) { t.ampSim.reset(); t.ampSimSlot = -1; } } refreshAll(); return; }
+            if (r == 7000) {                                                    // built-in amp sim (one per track; picking it again moves it here)
+                { ScopedLock l(p.lock); if (! t.ampSim) { t.ampSim = std::make_unique<ampsim::AmpSimProcessor>(); t.ampSim->prepare(p.sr); } t.fx[slot].reset(); t.ampSimSlot = slot; }
+                refreshAll(); openAmpSim(t); return; }
             if (r >= 6000) { ScopedLock l(p.lock); t.inCh = r - 6000; refreshAll(); return; }
             if (r >= 5000) { ScopedLock l(p.lock); t.plugin.reset(); Project::applyPreset(t, r - 5000); refreshAll(); return; }
-            p.fm.createPluginInstanceAsync(types[idx[r - 1]], p.sr, 4096, [this, &cur](std::unique_ptr<AudioPluginInstance> inst, const String& err) {
+            p.fm.createPluginInstanceAsync(types[idx[r - 1]], p.sr, 4096, [this, &t, slot, &cur](std::unique_ptr<AudioPluginInstance> inst, const String& err) {
                 if (! inst) { AlertWindow::showMessageBoxAsync(MessageBoxIconType::WarningIcon, "Plugin", err); return; }
-                inst->prepareToPlay(p.sr, 4096); { ScopedLock l(p.lock); cur = std::move(inst); } refreshAll(); });
+                inst->prepareToPlay(p.sr, 4096); { ScopedLock l(p.lock); if (slot >= 0 && t.hasAmp(slot)) { t.ampSim.reset(); t.ampSimSlot = -1; } cur = std::move(inst); } refreshAll(); });
         });
     }
     void handleIncomingMidiMessage(MidiInput*, const MidiMessage& m) override {
@@ -2423,7 +2449,7 @@ struct MainComponent : AudioAppComponent, Timer, MidiInputCallback, ChangeListen
     }
     void prepareToPlay(int, double rate) override { ScopedLock l(p.lock); p.sr = rate;
         { auto* ad = deviceManager.getCurrentAudioDevice(); nInActive = ad != nullptr ? ad->getActiveInputChannels().countNumberOfSetBits() : 0; }
-        for (auto& t : p.tracks) { t->coll.reset(rate); if (t->plugin) t->plugin->prepareToPlay(rate, 4096); for (auto& f : t->fx) if (f) f->prepareToPlay(rate, 4096); }
+        for (auto& t : p.tracks) { t->coll.reset(rate); if (t->plugin) t->plugin->prepareToPlay(rate, 4096); for (auto& f : t->fx) if (f) f->prepareToPlay(rate, 4096); if (t->ampSim) t->ampSim->prepare(rate); }
         for (auto& f : p.masterTrack.fx) if (f) f->prepareToPlay(rate, 4096); }
     void releaseResources() override {}
     void getNextAudioBlock(const AudioSourceChannelInfo& i) override {
