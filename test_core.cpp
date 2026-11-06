@@ -1218,7 +1218,7 @@ struct StartScreen : Component, ListBoxModel {
         { const auto lg = Rectangle<float>(20.f, 24.f, 44.f, 44.f); g.setGradientFill(ColourGradient(Colour(0xfff4f4f6), lg.getX(), lg.getY(), Colour(0xffa6a7af), lg.getRight(), lg.getBottom(), false)); g.fillRoundedRectangle(lg, 11.f);
           g.setColour(Colour(0xff1d1e22)); static const float hs[5] = { 10.f, 22.f, 30.f, 16.f, 8.f }; for (int k = 0; k < 5; ++k) g.fillRoundedRectangle(lg.getX() + 8.f + (float) k * 6.f, lg.getCentreY() - hs[k] * 0.5f, 3.6f, hs[k], 1.8f);
           g.setColour(Colour(0xfff2f2f5)); g.setFont(Font(FontOptions(20.f, Font::bold))); g.drawText("MiniDAW", 74, 24, sideW - 84, 26, Justification::centredLeft, false);
-          g.setColour(Colour(0xff8a8b93)); g.setFont(Font(FontOptions(12.f))); g.drawText("Version 1.2.2  ", 74, 48, sideW - 84, 18, Justification::centredLeft, false); }
+          g.setColour(Colour(0xff8a8b93)); g.setFont(Font(FontOptions(12.f))); g.drawText("Version 1.2.9  ", 74, 48, sideW - 84, 18, Justification::centredLeft, false); }
         { static const char* labels[7] = { "New Project", "Recent Projects", "Open Project...", "Open Auto-save Backup", "Settings", "Audio / MIDI", "Plug-in Manager" };
           g.setColour(Colour(0xff6b6c73)); g.setFont(Font(FontOptions(10.5f, Font::bold))); g.drawText("PROJECTS", 22, 90, 120, 16, Justification::centredLeft, false); g.drawText("SETTINGS", 22, navR[4].getY() - 22, 120, 16, Justification::centredLeft, false);
           for (int i = 0; i < 7; ++i) { const auto r = navR[i]; const bool act = (i == 0 && tab == NewTab) || (i == 1 && tab == RecentTab);
@@ -1717,7 +1717,7 @@ struct MainComponent : AudioAppComponent, Timer, MidiInputCallback, ChangeListen
             case 70: if (auto* w = dynamic_cast<DocumentWindow*>(getTopLevelComponent())) w->setMinimised(true); break;
             case 71: if (auto* w = dynamic_cast<DocumentWindow*>(getTopLevelComponent())) w->setFullScreen(! w->isFullScreen()); break;
             case 72: scan.triggerClick(); break; case 73: dev.triggerClick(); break;
-            case 80: AlertWindow::showMessageBoxAsync(MessageBoxIconType::InfoIcon, "About MiniDAW", "MiniDAW 1.2.2\nA digital audio workstation with MIDI + audio recording, VST3/AU hosting, a mixer, drum kit and synth instruments, undo/redo, bounce/export and project files.\n\nBuilt with " + SystemStats::getJUCEVersion() + "."); break;
+            case 80: AlertWindow::showMessageBoxAsync(MessageBoxIconType::InfoIcon, "About MiniDAW", "MiniDAW 1.2.9\nA digital audio workstation with MIDI + audio recording, VST3/AU hosting, a mixer, drum kit and synth instruments, undo/redo, bounce/export and project files.\n\nBuilt with " + SystemStats::getJUCEVersion() + "."); break;
             case 81: AlertWindow::showMessageBoxAsync(MessageBoxIconType::InfoIcon, "Keyboard Shortcuts", "Space  Play / stop\nR  Record      K  Metronome      C  Cycle      T  Tap tempo\nX  Mixer      I  Inspector      P  Piano roll      U  Tuner\n+ / -  Zoom      Return  Go to start\nPiano roll: click = add note, drag = move, drag edge = resize, right-click = delete,\n    Delete / arrows = remove / nudge the selected note, Cmd+wheel = zoom\nD  Duplicate region      Q  Quantize 1/16      Delete  Delete region\nCmd+Z / Shift+Cmd+Z  Undo / redo      Cmd+T  Split at playhead\nCmd+N / O / S / W  New / open / save / close project      Cmd+I  Import audio\nCmd+E  Export      Cmd+Delete  Delete track      Cmd+,  Preferences"); break;
             case 16: confirmDiscard([this] { openBackup(); }); break;
             case 100: metroDialog(); break; case 101: tapTempo(); break; case 102: tempoDialog(); break;
@@ -2025,7 +2025,7 @@ struct MiniDAWApp : JUCEApplication {
         const File f = projectFromCommandLine(commandLine); if (f == File()) return;
         if (w == nullptr) pendingOpen = f.getFullPathName(); else openInWindow(f); }
     const String getApplicationName() override { return "MiniDAW"; }
-    const String getApplicationVersion() override { return "1.2.2"; }
+    const String getApplicationVersion() override { return "1.2.9"; }
     void initialise(const String& commandLine) override { w = std::make_unique<Window>();
         File f = projectFromCommandLine(commandLine); if (pendingOpen.isNotEmpty()) f = File(pendingOpen); pendingOpen = {};
         if (f != File()) MessageManager::callAsync([this, f] { openInWindow(f); }); }
