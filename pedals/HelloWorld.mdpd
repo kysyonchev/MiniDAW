@@ -1,0 +1,11 @@
+// Simplest possible pedal: returns the input unchanged.
+// Good template to start from - change "return x" to "return ..." and add knobs.
+pedal "Hello World"
+brand "MiniDAW"
+category "boost"
+
+knob Volume = 5
+
+on sample(x) {
+    return x;
+}
