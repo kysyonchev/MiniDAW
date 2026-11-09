@@ -20,7 +20,7 @@ struct StemSettings {
     int engine = 0;                                                          
     int quality = 1; float sharpness = 2.f, sustainMs = 190.f, drumWidthHz = 700.f, bassHz = 180.f, guitarTopHz = 500.f, pianoTopHz = 1500.f, vocalTopHz = 4000.f;   
     int qMask = 63;                                                          
-    int model = 0, mode = 0, device = 0, shifts = 1; float overlap = 0.25f; String exe;                                                                
+    int model = 0, mode = 0, device = 0, shifts = 2; float overlap = 0.25f; String exe;                                                                
     int aMask = 63;                                                          
     int installed = 0;                                                       
     bool instrumental = false;                                               
@@ -37,10 +37,10 @@ struct StemSettings {
         guitarTopHz = (float) jlimit(250.0, 1000.0, x.getDoubleAttribute("gTop", 500.0)); pianoTopHz = (float) jlimit(600.0, 3000.0, x.getDoubleAttribute("pTop", 1500.0)); vocalTopHz = (float) jlimit(2000.0, 8000.0, x.getDoubleAttribute("vTop", 4000.0));
         qMask = x.getIntAttribute("qMask", 63) & 63; if (qMask == 0) qMask = 63; aMask = x.getIntAttribute("aMask", 63) & 63; if (aMask == 0) aMask = 63;
         installed = x.getIntAttribute("installed", 0) & ((1 << stemui::kNumModels) - 1); instrumental = x.getIntAttribute("instr", 0) != 0;
-        model = jlimit(0, stemui::kNumModels - 1, x.getIntAttribute("model", 0)); mode = jlimit(0, 3, x.getIntAttribute("mode", 0)); device = jlimit(0, 3, x.getIntAttribute("device", 0)); shifts = jlimit(0, 5, x.getIntAttribute("shifts", 1));
+        model = jlimit(0, stemui::kNumModels - 1, x.getIntAttribute("model", 0)); mode = jlimit(0, 3, x.getIntAttribute("mode", 0)); device = jlimit(0, 3, x.getIntAttribute("device", 0)); shifts = jlimit(0, 5, x.getIntAttribute("shifts", 2));
         overlap = (float) jlimit(0.1, 0.5, x.getDoubleAttribute("overlap", 0.25)); exe = x.getStringAttribute("exe"); muteOriginal = x.getIntAttribute("mute", 1) != 0; saveFiles = x.getIntAttribute("saveFiles", 0) != 0; }
 };
-struct StemOut { String name; Colour colour; std::shared_ptr<std::vector<float>> wav; double sr = 44100; File file; };    
+struct StemOut { String name; Colour colour; std::shared_ptr<std::vector<float>> wav, wavR; double sr = 44100; File file; };    
 namespace stemui {
 struct StemInfo { const char* key; const char* name; juce::uint32 argb; };
 inline const StemInfo* infoFor(const String& key) {
@@ -53,15 +53,22 @@ inline Colour colourFor(const String& key) { auto* i = infoFor(key); return Colo
 inline String nameFor(const String& key) { auto* i = infoFor(key); return i != nullptr ? String(i->name) : key.substring(0, 1).toUpperCase() + key.substring(1); }
 inline int orderOf(const String& key) { static const char* o[] = { "guitar", "piano", "bass", "vocals", "drums", "other", "melody", "no_vocals", "no_drums", "no_bass", "rest" }; for (int i = 0; i < 11; ++i) if (key == o[i]) return i; return 50; }
 static const char* const kTwoStems[4] = { "", "vocals", "drums", "bass" };
-inline bool writeWav(const File& f, const float* d, int n, double sr) {                      
-    f.deleteFile(); std::unique_ptr<FileOutputStream> fo(f.createOutputStream()); if (! fo) return false;
-    WavAudioFormat wav; std::unique_ptr<AudioFormatWriter> w(wav.createWriterFor(fo.get(), sr, 1u, 24, {}, 0)); if (! w) return false;
-    fo.release(); const float* ch[] = { d }; return w->writeFromFloatArrays(ch, 1, n); }
+inline bool writeWav(const File& f, const float* d, const float* dR, int n, double sr) {   // dR != nullptr -> stereo file
+    f.deleteFile(); std::unique_ptr<FileOutputStream> fo(f.createOutputStream()); if (! fo) return false; const unsigned int nch = dR != nullptr ? 2u : 1u;
+    WavAudioFormat wav; std::unique_ptr<AudioFormatWriter> w(wav.createWriterFor(fo.get(), sr, nch, 24, {}, 0)); if (! w) return false;
+    fo.release(); const float* ch[] = { d, dR != nullptr ? dR : d }; return w->writeFromFloatArrays(ch, (int) nch, n); }
+inline bool writeWav(const File& f, const float* d, int n, double sr) { return writeWav(f, d, nullptr, n, sr); }
 inline std::shared_ptr<std::vector<float>> readMono(const File& f, double& sr) {                
     AudioFormatManager afm; afm.registerBasicFormats(); std::unique_ptr<AudioFormatReader> rd(afm.createReaderFor(f)); if (! rd) return nullptr;
     const int n = (int) jmin((int64) rd->lengthInSamples, (int64) (rd->sampleRate * 3600.0)); AudioBuffer<float> b(jmax(1, (int) rd->numChannels), jmax(1, n)); if (! rd->read(&b, 0, n, 0, true, true)) return nullptr;
     auto v = std::make_shared<std::vector<float>>((size_t) n); for (int i = 0; i < n; ++i) { float s = 0; for (int ch = 0; ch < b.getNumChannels(); ++ch) s += b.getSample(ch, i); (*v)[(size_t) i] = s / (float) b.getNumChannels(); }
     sr = rd->sampleRate; return v; }
+inline std::shared_ptr<std::vector<float>> readStereo(const File& f, double& sr, std::shared_ptr<std::vector<float>>& right) {
+    right.reset(); AudioFormatManager afm; afm.registerBasicFormats(); std::unique_ptr<AudioFormatReader> rd(afm.createReaderFor(f)); if (! rd) return nullptr;
+    const int n = (int) jmin((int64) rd->lengthInSamples, (int64) (rd->sampleRate * 3600.0)); AudioBuffer<float> b(jmax(1, (int) rd->numChannels), jmax(1, n)); if (! rd->read(&b, 0, n, 0, true, true)) return nullptr;
+    auto L = std::make_shared<std::vector<float>>((size_t) n); if (b.getNumChannels() >= 2) right = std::make_shared<std::vector<float>>((size_t) n);
+    for (int i = 0; i < n; ++i) { (*L)[(size_t) i] = b.getSample(0, i); if (right) (*right)[(size_t) i] = b.getSample(1, i); }
+    sr = rd->sampleRate; return L; }
 inline File envDir() {
 #if JUCE_MAC
     return File::getSpecialLocation(File::userApplicationDataDirectory).getChildFile("Application Support/MiniDAW/demucs-env");
@@ -351,8 +358,8 @@ struct StemSplitterPanel : Component, Thread, Timer {
     enum State { Idle, Running, Done, Failed };
     std::function<void(std::vector<StemOut>&)> onDone; std::function<void(const StemSettings&)> onChanged;
     StemSettings cfg;
-    StemSplitterPanel(const String& clipName, std::shared_ptr<std::vector<float>> wavData, double sampleRate, std::vector<float> peakData, const StemSettings& s)
-        : Thread("MiniDAW stem splitter"), cfg(s), name(clipName), src(std::move(wavData)), srcSr(sampleRate), peaks(std::move(peakData)) {
+    StemSplitterPanel(const String& clipName, std::shared_ptr<std::vector<float>> wavData, double sampleRate, std::vector<float> peakData, const StemSettings& s, std::shared_ptr<std::vector<float>> wavRight = nullptr)
+        : Thread("MiniDAW stem splitter"), cfg(s), name(clipName), src(std::move(wavData)), srcR(std::move(wavRight)), srcSr(sampleRate), peaks(std::move(peakData)) {
         engine.items = { { "Quick Split", "Built-in  -  6 stems by pitch range  -  no setup" }, { "AI Split (Demucs)", "Best quality  -  real instrument separation" } };
         engine.sel = cfg.engine; engine.onChange = [this](int i) { cfg.engine = i; ensureModelForStems(); refreshLayout(); changed(); }; addAndMakeVisible(engine);
         for (int i = 0; i < stemui::kNumStems; ++i) {
@@ -543,7 +550,7 @@ struct StemSplitterPanel : Component, Thread, Timer {
             ensureModelForStems();
             if (! isInstalled(cfg.model) || exeBox.state != 1) { startDownload(cfg.model, true); return; } }       
         beginSplit(); }
-    void beginSplit() { job = cfg; cancelFlag = false; dlMode = false; progress = 0.f; setStatus("Starting..."); state = Running; reveal.setVisible(false); setBusy(true); startThread(); resized(); repaint(); }
+    void beginSplit() { job = cfg; cancelFlag = false; dlMode = false; progress = 0.f; setStatus("Starting..."); state = Running; reveal.setVisible(false); setBusy(true); startThread(Thread::Priority::low); resized(); repaint(); }
     void setBusy(bool b) { engine.setEnabled(! b); for (auto& r : rows) r.c->setEnabled(! b); if (! b) syncAiChips(); updateGo(); }
     void finished(int result, const String& message, std::vector<StemOut> stems) {         
         if (result == 0) { state = Idle; setStatus({}); }
@@ -567,8 +574,9 @@ struct StemSplitterPanel : Component, Thread, Timer {
         ss.zones = true; ss.guitarTopHz = job.guitarTopHz; ss.pianoTopHz = job.pianoTopHz; ss.vocalTopHz = job.vocalTopHz;
         auto on = [&](const char* k) { return ((job.qMask >> stemui::stemIndex(k)) & 1) != 0; };
         ss.guitar = on("guitar"); ss.piano = on("piano"); ss.bass = on("bass"); ss.vocals = on("vocals"); ss.drums = on("drums"); ss.other = on("other");
-        auto r = stem::split(src->data(), (int) src->size(), srcSr, ss, [this](float f) { progress = f; setStatus(f < 0.15f ? "Analysing audio..." : f < 0.70f ? "Separating hits from sustained sound..." : "Rendering stems..."); }, &cancelFlag);
-        std::vector<float> rest(src->begin(), src->end());                                          
+        std::vector<float> mono(src->begin(), src->end()); if (srcR && srcR->size() == src->size()) for (size_t i = 0; i < mono.size(); ++i) mono[i] = 0.5f * (mono[i] + (*srcR)[i]);
+        auto r = stem::split(mono.data(), (int) mono.size(), srcSr, ss, [this](float f) { progress = f; setStatus(f < 0.15f ? "Analysing audio..." : f < 0.70f ? "Separating hits from sustained sound..." : "Rendering stems..."); }, &cancelFlag);
+        std::vector<float> rest(mono.begin(), mono.end());                                          
         auto add = [&](const char* key, std::vector<float>& v) { if (v.empty()) return; const size_t m = jmin(v.size(), rest.size()); for (size_t i = 0; i < m; ++i) rest[i] -= v[i];
             StemOut o; o.name = stemui::nameFor(key); o.colour = stemui::colourFor(key); o.wav = std::make_shared<std::vector<float>>(std::move(v)); o.sr = srcSr; out.push_back(std::move(o)); };
         add("guitar", r.guitar); add("piano", r.piano); add("bass", r.bass); add("vocals", r.vocals); add("drums", r.drums); add("other", r.other);
@@ -579,7 +587,7 @@ struct StemSplitterPanel : Component, Thread, Timer {
         tmp = File::getSpecialLocation(File::tempDirectory).getChildFile("MiniDAW-stems-" + String::toHexString(Random::getSystemRandom().nextInt64()));
         if (! tmp.createDirectory().wasOk()) { err = "Could not create a temporary folder."; return; }
         const File in = tmp.getChildFile("input.wav"), outDir = tmp.getChildFile("out"); setStatus("Preparing audio...");
-        if (! stemui::writeWav(in, src->data(), (int) src->size(), srcSr)) { err = "Could not write the temporary audio file."; return; }
+        if (! stemui::writeWav(in, src->data(), (srcR && srcR->size() == src->size()) ? srcR->data() : nullptr, (int) src->size(), srcSr)) { err = "Could not write the temporary audio file."; return; }
         StringArray args { exeFile.getFullPathName(), "-n", stemui::kModelInfo[job.model].key, "--shifts", String(job.shifts), "--overlap", String(job.overlap, 2), "-o", outDir.getFullPathName(), "--filename", "{stem}.{ext}", "--float32" };
         if (job.mode > 0) args.add(String("--two-stems=") + stemui::kTwoStems[job.mode]);
         if (job.device == 1) { args.add("-d"); args.add("cpu"); } else if (job.device == 2) { args.add("-d"); args.add("mps"); } else if (job.device == 3) { args.add("-d"); args.add("cuda"); }
@@ -603,18 +611,19 @@ struct StemSplitterPanel : Component, Thread, Timer {
         for (auto& f : outDir.findChildFiles(File::findFiles, true, "*.wav")) files.emplace_back(f.getFileNameWithoutExtension().toLowerCase(), f);
         std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) { return stemui::orderOf(a.first) < stemui::orderOf(b.first); });
         std::vector<std::pair<String, StemOut>> all;
-        for (auto& kv : files) { double sr = 44100; auto v = stemui::readMono(kv.second, sr); if (! v) continue; StemOut o; o.name = stemui::nameFor(kv.first); o.colour = stemui::colourFor(kv.first); o.wav = v; o.sr = sr; o.file = kv.second; all.emplace_back(kv.first, std::move(o)); }
+        for (auto& kv : files) { double sr = 44100; std::shared_ptr<std::vector<float>> vR; auto v = stemui::readStereo(kv.second, sr, vR); if (! v) continue; StemOut o; o.name = stemui::nameFor(kv.first); o.colour = stemui::colourFor(kv.first); o.wav = v; o.wavR = vR; o.sr = sr; o.file = kv.second; all.emplace_back(kv.first, std::move(o)); }
         std::vector<StemOut> restParts;                                                            
         for (auto& kv : all) { const int si = stemui::stemIndex(kv.first); if (si >= 0 && ((job.aMask >> si) & 1) != 0) out.push_back(std::move(kv.second)); else restParts.push_back(std::move(kv.second)); }
         if (! restParts.empty()) { size_t len = restParts[0].wav->size(); for (auto& r : restParts) len = jmin(len, r.wav->size());
-            if (len > 0) { auto mix = std::make_shared<std::vector<float>>(len, 0.f); for (auto& r : restParts) for (size_t i = 0; i < len; ++i) (*mix)[i] += (*r.wav)[i];
-                StemOut o; o.name = stemui::nameFor("rest"); o.colour = stemui::colourFor("rest"); o.wav = mix; o.sr = restParts[0].sr; out.push_back(std::move(o)); } }
+            if (len > 0) { auto mix = std::make_shared<std::vector<float>>(len, 0.f), mixR = std::make_shared<std::vector<float>>(len, 0.f);
+                for (auto& r : restParts) for (size_t i = 0; i < len; ++i) { (*mix)[i] += (*r.wav)[i]; (*mixR)[i] += (r.wavR && r.wavR->size() >= len) ? (*r.wavR)[i] : (*r.wav)[i]; }
+                StemOut o; o.name = stemui::nameFor("rest"); o.colour = stemui::colourFor("rest"); o.wav = mix; o.wavR = mixR; o.sr = restParts[0].sr; out.push_back(std::move(o)); } }
         if (out.empty()) err = "Demucs finished but no stem files were found.\n\n" + tail.trim().getLastCharacters(600); }
     void saveStems(const std::vector<StemOut>& stems) {
         savedDir = File::getSpecialLocation(File::userMusicDirectory).getChildFile("MiniDAW Stems").getChildFile(File::createLegalFileName(name));
         if (! savedDir.createDirectory().wasOk()) { savedDir = File(); return; }
-        for (auto& s : stems) { const File dst = savedDir.getChildFile(File::createLegalFileName(s.name) + ".wav"); if (s.file.existsAsFile()) { dst.deleteFile(); s.file.copyFileTo(dst); } else stemui::writeWav(dst, s.wav->data(), (int) s.wav->size(), s.sr); } }
-    String name; std::shared_ptr<std::vector<float>> src; double srcSr = 44100; std::vector<float> peaks;
+        for (auto& s : stems) { const File dst = savedDir.getChildFile(File::createLegalFileName(s.name) + ".wav"); if (s.file.existsAsFile()) { dst.deleteFile(); s.file.copyFileTo(dst); } else stemui::writeWav(dst, s.wav->data(), s.wavR ? s.wavR->data() : nullptr, (int) s.wav->size(), s.sr); } }
+    String name; std::shared_ptr<std::vector<float>> src, srcR; double srcSr = 44100; std::vector<float> peaks;
     State state = Idle; StemSettings job; std::atomic<float> progress { 0.f }; std::atomic<bool> cancelFlag { false };
     CriticalSection statusLock, procLock; String status; ChildProcess* active = nullptr; File exeFile, savedDir; std::unique_ptr<FileChooser> chooser;
     std::shared_ptr<stemui::DlShared> dl; bool dlMode = false, dlThenSplit = false; int dlModel = 0; Component::SafePointer<CallOutBox> picker;          
