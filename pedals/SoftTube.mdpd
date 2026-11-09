@@ -1,0 +1,14 @@
+// Tube-style soft saturation using tanh().
+// Smoother and warmer than the hard clipper.
+pedal "Soft Tube"
+brand "MiniDAW"
+category "overdrive"
+
+knob Drive = 5
+knob Level = 6
+
+on sample(x) {
+    let g = 1.0 + Drive * 8.0;
+    let y = tanh(x * g);
+    return y * (0.3 + Level * 0.12);
+}
