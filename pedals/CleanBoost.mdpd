@@ -1,0 +1,11 @@
+// A clean gain stage. Turn the knob up to push your amp input.
+pedal "Clean Boost"
+brand "MiniDAW"
+category "boost"
+
+knob Level = 5
+
+on sample(x) {
+    // 0.5 .. 2.5x
+    return x * (0.5 + Level * 0.2);
+}
