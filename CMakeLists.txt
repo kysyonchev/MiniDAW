@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
-project(MiniDAW VERSION 1.2.9)
+project(MiniDAW VERSION 1.2.7)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(FetchContent)
-FetchContent_Declare(JUCE GIT_REPOSITORY https://github.com/juce-framework/JUCE.git GIT_TAG 8.0.4)
+FetchContent_Declare(JUCE GIT_REPOSITORY https://github.com/juce-framework/JUCE.git GIT_TAG 8.0.4 GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(JUCE)
 
 juce_add_gui_app(MiniDAW
@@ -15,7 +15,7 @@ juce_add_gui_app(MiniDAW
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "MiniDAW needs audio input for your interface.")
 
-target_sources(MiniDAW PRIVATE main.cpp Stemsplitter.h Stemsplit.h AudioCore.h AmpSim.h AmpSimPanel.h)
+target_sources(MiniDAW PRIVATE main.cpp Stemsplitter.h Stemsplit.h AudioCore.h AmpSim.h AmpSimPanel.h CustomPedal.h)
 target_compile_definitions(MiniDAW PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=1 JUCE_USE_MP3AUDIOFORMAT=1)
 target_link_libraries(MiniDAW PRIVATE juce::juce_audio_utils juce::juce_gui_extra
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
@@ -25,10 +25,12 @@ add_custom_command(TARGET MiniDAW POST_BUILD
         "${CMAKE_CURRENT_SOURCE_DIR}/icon/MiniDAW.icns"
         "$<TARGET_BUNDLE_CONTENT_DIR:MiniDAW>/Resources/Icon.icns")
 
-option(MINIDAW_BUILD_TESTS "Build the AudioCore and AmpSim unit tests" OFF)
+option(MINIDAW_BUILD_TESTS "Build the AudioCore, Stemsplit and AmpSim unit tests (no JUCE needed)" OFF)
 if(MINIDAW_BUILD_TESTS)
-    add_executable(test_core test_core.cpp)
-    target_include_directories(test_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    add_executable(test_ampsim test_ampsim.cpp)
-    target_include_directories(test_ampsim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    enable_testing()
+    foreach(t test_core test_ampsim)
+        add_executable(${t} ${t}.cpp)
+        target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        add_test(NAME ${t} COMMAND ${t})
+    endforeach()
 endif()
