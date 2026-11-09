@@ -1,4 +1,9 @@
 #pragma once
+#if defined(__clang__)
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wfloat-equal"
+ #pragma clang diagnostic ignored "-Wswitch-enum"
+#endif
 // ═══════════════════════════════════════════════════════════════════════════
 //  AmpSim.h — built-in guitar amp / cabinet / pedalboard simulation
 //  Pure DSP, no JUCE, no Qt, no PortAudio.
@@ -13,6 +18,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include "CustomPedal.h" 
 
 namespace ampsim {
 
@@ -96,7 +102,7 @@ public:
 // ─── Modulated delay (chorus / flanger) ────────────────────────────────────
 class ModDelay {
 public:
-    explicit ModDelay(int size = 4096) : size_(size), line_(size, 0.f) {}
+    explicit ModDelay(int size = 4096) : size_(size), line_((size_t) size, 0.f) {}
     void clear() { std::fill(line_.begin(), line_.end(), 0.f); }
     void process(const float* x, const float* delay, float fb, float* out, int n) {
         constexpr int CH = 16;
@@ -370,19 +376,20 @@ private:
 enum class PedalKind {
     DS1, OD1, SD1, TS9, Klon, Rat, Muff, FuzzFace,
     Comp, EQ5, Chorus, Flanger, Phaser, Tremolo, Delay,
-    BD2, OCD, ToneBender, Octavia, Boost, Wah, EnvFilter, Univibe, Tape, Reverb, NoiseGate, Octaver, HarmTrem, HM2
+    BD2, OCD, ToneBender, Octavia, Boost, Wah, EnvFilter, Univibe, Tape, Reverb, NoiseGate, Octaver, HarmTrem, HM2, Custom
+
 };
 
 struct PedalKnobDef {
-    const char* name;
-    const char* label;
+    std::string name;
+    std::string label;
     float def, lo, hi;
 };
 
 struct PedalMeta {
-    const char* key;
-    const char* display;
-    const char* brand;
+    std::string key;
+    std::string display;
+    std::string brand;
     PedalKind kind;
     std::vector<PedalKnobDef> knobs;
 };
@@ -432,16 +439,62 @@ inline const char* categoryOf(PedalKind k) {
         case PedalKind::Chorus: case PedalKind::Flanger: case PedalKind::Phaser: case PedalKind::Univibe: case PedalKind::Tremolo: case PedalKind::HarmTrem: return "MODULATION";
         case PedalKind::Delay: case PedalKind::Tape: case PedalKind::Reverb: return "DELAY / REVERB";
         case PedalKind::EQ5: return "EQ";
+        case PedalKind::Custom: return "CUSTOM";     // ── NEW ──
     }
     return "OTHER";
+}
+
+// ── NEW: map a .mdpd "category" string to one of the built-in kinds, so we can reuse its tile colour ──
+inline PedalKind kindFromCategory(const std::string& cat) {
+    std::string c = cat; for (auto& ch : c) ch = (char) std::toupper((unsigned char) ch);
+    if (c.find("FUZZ")   != std::string::npos) return PedalKind::FuzzFace;
+    if (c.find("DIST")   != std::string::npos) return PedalKind::DS1;
+    if (c.find("OVER")   != std::string::npos) return PedalKind::TS9;
+    if (c.find("MOD")    != std::string::npos) return PedalKind::Chorus;
+    if (c.find("DELAY")  != std::string::npos) return PedalKind::Delay;
+    if (c.find("REVERB") != std::string::npos) return PedalKind::Delay;
+    if (c.find("FILTER") != std::string::npos) return PedalKind::Wah;
+    if (c.find("DYNAMIC")!= std::string::npos) return PedalKind::Boost;
+    if (c.find("BOOST")  != std::string::npos) return PedalKind::Boost;
+    return PedalKind::TS9;
 }
 inline const std::vector<const char*>& pedalCategories() {
     static const std::vector<const char*> v = { "BOOST / DYNAMICS", "OVERDRIVE", "DISTORTION", "FUZZ", "FILTER / PITCH", "MODULATION", "DELAY / REVERB", "EQ" };
     return v;
 }
+// ── NEW: bridges a compiled CustomPedal to a PedalMeta (so we can use the existing browser / tile code) ──
+struct CustomMetaStore {
+    PedalMeta                    meta;
+    std::shared_ptr<CustomPedal> def;
+};
+inline std::vector<std::unique_ptr<CustomMetaStore>>& customStore() {
+    static std::vector<std::unique_ptr<CustomMetaStore>> v; return v;
+}
+inline const PedalMeta* customMetaFor(const std::string& key) {
+    for (auto& s : customStore()) if (s->meta.key == key) return &s->meta;
+    return nullptr;
+}
+inline PedalMeta makeCustomMeta(const CustomPedal& d) {
+    PedalMeta m;
+    m.key     = CustomPedalRegistry::keyOf(d);
+    m.display = d.name;
+    m.brand   = d.brand.empty() ? "Custom" : d.brand;
+    m.kind    = PedalKind::Custom;
+    for (auto& k : d.knobs) m.knobs.push_back({ k.name, k.label, k.def, k.lo, k.hi });
+    return m;
+}
+inline std::string registerCustomPedal(std::shared_ptr<CustomPedal> def) {
+    if (! def) return {};
+    const std::string key = CustomPedalRegistry::keyOf(*def);
+    for (auto& s : customStore()) if (s->meta.key == key) { s->meta = makeCustomMeta(*def); s->def = def; customPedals().add(def); return key; }
+    customStore().push_back(std::make_unique<CustomMetaStore>(CustomMetaStore{ makeCustomMeta(*def), def }));
+    customPedals().add(def);
+    return key;
+}
+
 inline const PedalMeta* findMeta(const std::string& key) {
     for (auto& m : pedalMetas()) if (key == m.key) return &m;
-    return nullptr;
+    return customMetaFor(key);                     // ── NEW ──
 }
 inline const PedalMeta* metaOf(PedalKind k) {
     for (auto& m : pedalMetas()) if (k == m.kind) return &m;
@@ -449,15 +502,17 @@ inline const PedalMeta* metaOf(PedalKind k) {
 }
 
 // ─── StompPedal ────────────────────────────────────────────────────────────
+
 class StompPedal {
 public:
     StompPedal(PedalKind kind, double fs);
+    StompPedal(std::shared_ptr<CustomPedal> def, double fs);      // ── NEW ──
 
     void setParam(const std::string& name, double v) { params[name] = v; recompute(); }
     void setFs(double sr) {
         if (sr != fs) {
             fs = sr;
-            if (kind == PedalKind::Delay || kind == PedalKind::Tape) dbuf_.assign((size_t)(fs * 1.0) + 8, 0.f);   // buffer length depends on fs
+            if (kind == PedalKind::Delay || kind == PedalKind::Tape) dbuf_.assign((size_t)(fs * 1.0) + 8, 0.f);
             if (rev_) rev_->prepare(fs);
             reset();
         }
@@ -467,22 +522,31 @@ public:
     void reset();
 
     std::unique_ptr<StompPedal> clone() const {
+        if (customDef) {
+            auto n = std::make_unique<StompPedal>(customDef, fs);
+            n->enabled = enabled; n->post = post; n->params = params;
+            n->recompute(); n->reset(); return n;
+        }
         auto n = std::make_unique<StompPedal>(kind, fs);
-        n->enabled = enabled;
-        n->post    = post;
-        n->params  = params;
-        n->recompute();
-        n->reset();
-        return n;
+        n->enabled = enabled; n->post = post; n->params = params;
+        n->recompute(); n->reset(); return n;
     }
 
-    const char* keyCstr() const { auto* m = metaOf(kind); return m ? m->key : ""; }
+    // ── NEW: unified meta lookup (built-in + custom) ──
+    const PedalMeta* meta() const {
+        return customDef ? customMetaFor(CustomPedalRegistry::keyOf(*customDef)) : metaOf(kind);
+    }
+    const char* keyCstr() const { auto* m = meta(); return m ? m->key.c_str() : ""; }
 
     bool enabled = true;
-    bool post = false;      // false: in front of the amp   true: after amp + cab (effects-loop position)
+    bool post = false;
     PedalKind kind;
     double fs;
     std::unordered_map<std::string, double> params;
+
+    // ── NEW ──
+    std::shared_ptr<CustomPedal>          customDef;
+    std::unique_ptr<CustomPedal::Runtime> customRt;
 
 private:
     void recompute();
@@ -523,6 +587,19 @@ inline StompPedal::StompPedal(PedalKind k, double sr) : kind(k), fs(sr) {
     recompute();
 }
 
+inline StompPedal::StompPedal(std::shared_ptr<CustomPedal> def, double sr)
+    : kind(PedalKind::Custom), fs(sr), customDef(std::move(def)) {
+    if (customDef) {
+        for (auto& k : customDef->knobs) params[k.name] = k.def;
+        customRt = customDef->makeRuntime();
+        customDef->pushParams(*customRt, params);
+    }
+    post = false;                         // custom pedals default to "in front of the amp"
+    sa_.resize(4096); sb_.resize(4096); sc_.resize(4096);
+    reset();
+    recompute();
+}
+
 inline void StompPedal::reset() {
     hp_.reset(); pre_.reset(); tone_.reset();
     for (auto& b : aux_) b.reset();
@@ -534,9 +611,11 @@ inline void StompPedal::reset() {
     os_.reset();
     s1_ = s2_ = env_ = ph2_ = 0.0; wpos_ = 0.5; fl1_ = fl2_ = 1; gh_ = 0; pos_ = false; go_ = true;
     if (rev_) rev_->reset();
+    if (customDef && customRt) customDef->resetRuntime(*customRt);  
 }
 
 inline void StompPedal::recompute() {
+    if (kind == PedalKind::Custom) return;                           
     hp_.set(bq_highpass(fs, 80, 0.707));
     auto g = [&](const char* k, double d) {
         auto it = params.find(k);
@@ -591,6 +670,16 @@ inline void StompPedal::process(const float* x, float* y, int n) {
         auto it = params.find("level");
         return 0.15 + (it != params.end() ? it->second : 0.5) * 1.85;
     };
+
+    // ── NEW: custom .mdpd pedal ──
+    if (kind == PedalKind::Custom) {
+        if (! customDef || ! customRt) { std::memcpy(y, x, (size_t) n * sizeof(float)); return; }
+        customDef->pushParams(*customRt, params);
+        customRt->dt = 1.0f / (float) fs;
+        for (int i = 0; i < n; ++i) y[i] = customDef->tick(*customRt, x[i]);
+        return;
+    }
+
     switch (kind) {
         case PedalKind::DS1: {
             const double dist = P("dist");
@@ -750,7 +839,7 @@ inline void StompPedal::process(const float* x, float* y, int n) {
             for (int i = 0; i < n; ++i) d[(size_t)i] = (float)(d_cur_ + (nd - d_cur_) * i / n);
             d_cur_ = nd;
             for (int i = 0; i < n; ++i) {
-                double pos = dw_ + i - d[(size_t)i];
+                double pos = (double) dw_ + (double) i - d[(size_t)i];
                 int i0 = (int) std::floor(pos);
                 double fr = pos - i0;
                 int a = ((i0 % M) + M) % M;
@@ -947,6 +1036,21 @@ public:
         pedals.push_back(std::make_unique<StompPedal>(k, fs));
         return pedals.back().get();
     }
+    // ── NEW: add a custom .mdpd pedal ──
+    StompPedal* add(std::shared_ptr<CustomPedal> def) {
+        if ((int)pedals.size() >= kMaxPedals || ! def) return nullptr;
+        pedals.push_back(std::make_unique<StompPedal>(def, fs));
+        return pedals.back().get();
+    }
+    // ── NEW: add by meta (works for built-in and custom) ──
+    StompPedal* add(const PedalMeta* m) {
+        if (! m) return nullptr;
+        if (m->kind == PedalKind::Custom) {
+            auto def = customPedals().find(m->key);
+            return def ? add(def) : nullptr;
+        }
+        return add(m->kind);
+    }
     void removeAt(int i) {
         if (i >= 0 && i < (int)pedals.size()) pedals.erase(pedals.begin() + i);
     }
@@ -1047,7 +1151,7 @@ public:
         for (auto& s : st_) s.reset();
         pa_.reset(); os_.reset();
         dc_.reset(); cabhp_.reset(); cabres_.reset(); cabbox_.reset(); cabm1_.reset(); cabm2_.reset();
-        micsh_.reset(); micpx_.reset(); cablp1_.reset(); cablp2_.reset(); presence_.reset();
+        micsh_.reset(); micpx_.reset(); cablp1_.reset(); cablp2_.reset(); presence_.reset(); tsB_.reset(); tsM_.reset(); tsT_.reset();
         rev_.reset();
         pedalboard.reset();
         gate_gain_ = 1.0; gate_env_ = 0.0; gate_open_ = true; gate_hold_ = 0;
@@ -1092,11 +1196,12 @@ public:
         // cabinet + master
         for (int i = 0; i < n; ++i) {
             float x = dc_.tick(mono_[(size_t) i]);
+            x = tsB_.tick(x);    x = tsM_.tick(x);    x = tsT_.tick(x);
             x = cabhp_.tick(x);  x = cabres_.tick(x); x = cabbox_.tick(x);
             x = cabm1_.tick(x);  x = cabm2_.tick(x);
             x = micsh_.tick(x);  x = micpx_.tick(x);
+            x = presence_.tick(x);                      // presence acts on the power amp, i.e. ahead of the speaker roll-off
             x = cablp1_.tick(x); x = cablp2_.tick(x);
-            x = presence_.tick(x);
             gm_ += kgm_ * (masterT_ - gm_);
             mono_[(size_t) i] = softLimit(x * (float) gm_);
         }
@@ -1190,9 +1295,14 @@ private:
             else if (e.type == 3) vf_[k].set(bq_high_shelf(fsO, e.f, e.g));
             else                  vf_[k].set(BqCoeffs());
         }
-        bass_.set(bq_low_shelf(fsO, 120, p.bass_db));
-        mid_.set(bq_peaking(fsO, 800, p.mid_db, 0.8));
-        treble_.set(bq_high_shelf(fsO, 2800, p.treble_db));
+        static const double midHz[4] = { 520.0, 720.0, 1000.0, 650.0 };
+        const double mf = midHz[std::max(0, std::min(3, p.voice))];
+        bass_.set(bq_low_shelf(fsO, 170, p.bass_db * 0.5));          // half of each control acts ahead of the last gain stage (interacts with the distortion)
+        mid_.set(bq_peaking(fsO, mf, p.mid_db * 0.5, 0.8));
+        treble_.set(bq_high_shelf(fsO, 2800, p.treble_db * 0.5));
+        tsB_.set(bq_low_shelf(fs_, 170, p.bass_db * 0.5));           // ...and half after the power amp, so the control always has a clear effect
+        tsM_.set(bq_peaking(fs_, mf, p.mid_db * 0.5, 0.8));
+        tsT_.set(bq_high_shelf(fs_, 2800, p.treble_db * 0.5));
 
         pa_.pgT = 0.65 + sag * 1.5;
         pa_.sagK = sag * 1.7;
@@ -1202,7 +1312,7 @@ private:
         const double mic = std::max(0.0, std::min(1.0, (double) p.mic));
         dc_.set(bq_highpass(fs_, 20));
         cabhp_.set(bq_highpass(fs_, 78.0, 0.75));
-        cabres_.set(bq_peaking(fs_, 115.0, p.cab_res_db, 1.1));
+        cabres_.set(bq_peaking(fs_, 105.0, p.cab_res_db * 1.25, 0.9));
         cabbox_.set(bq_peaking(fs_, 390.0, -1.0, 0.9));
         cabm1_.set(bq_peaking(fs_, 2150.0, 2.0, 1.0));
         cabm2_.set(bq_peaking(fs_, 3500.0, 1.0, 1.6));
@@ -1211,9 +1321,10 @@ private:
         const double lpc = std::min((double) p.cab_lp_hz * (1.0 - 0.22 * mic), fs_ * 0.45);
         cablp1_.set(bq_lowpass(fs_, lpc, 0.62));
         cablp2_.set(bq_lowpass(fs_, lpc, 1.00));
-        presence_.set(bq_high_shelf(fs_, 3500, p.presence_db));
+        presence_.set(bq_high_shelf(fs_, 2800, p.presence_db * 1.25));
 
-        masterT_ = (double) p.master * v.outTrim * kOutBase / (0.75 + 0.5 * pa_.pgT);
+        levelComp_ = std::pow(10.0, levelCompDb(p.voice, drive) / 20.0);
+        masterT_ = (double) p.master * v.outTrim * kOutBase * levelComp_ / (0.75 + 0.5 * pa_.pgT);
     }
 
     inline float tickCore(float x) {
@@ -1226,6 +1337,19 @@ private:
         return pa_.tick(s);
     }
 
+    // Keeps the perceived loudness roughly constant as DRIVE moves (clean no longer vanishes, high gain no longer jumps out).
+    // Measured per voicing with a plucked-chord test signal, then applied at 70 %.
+    static double levelCompDb(int voice, double drive) {
+#ifdef AMPSIM_CALIBRATE
+        (void) voice; (void) drive; return 0.0;   // used only by the offline calibration tool
+#endif
+        static const float T[4][11] = {
+            { 12.0f, 10.0f, 7.3f, 4.6f, 2.1f, -0.3f, -2.4f, -4.2f, -5.7f, -6.9f, -7.8f },
+            { 12.0f, 10.9f, 7.5f, 4.4f, 1.6f, -0.9f, -2.9f, -4.4f, -5.6f, -6.4f, -7.0f },
+            { 12.0f, 11.0f, 7.9f, 5.1f, 2.4f, -0.0f, -2.0f, -3.7f, -5.1f, -6.1f, -6.8f },
+            { 12.0f, 12.0f, 9.1f, 5.9f, 3.2f, 1.0f, -0.7f, -1.9f, -2.7f, -3.2f, -3.4f } };
+        const double x = std::max(0.0, std::min(1.0, drive)) * 10.0; const int i = std::min(9, (int) x); const double f = x - i; const int vi = std::max(0, std::min(3, voice));
+        return (double) T[vi][i] * (1.0 - f) + (double) T[vi][i + 1] * f; }
     static constexpr double kOutBase = 1.0;
     double fs_ = 44100.0, gate_gain_ = 1.0;
     AmpParams applied_;
@@ -1233,6 +1357,8 @@ private:
     detail::PowerAmp pa_;
     Biquad tightHp_, vf_[3], bass_, mid_, treble_;
     Biquad dc_, cabhp_, cabres_, cabbox_, cabm1_, cabm2_, micsh_, micpx_, cablp1_, cablp2_, presence_;
+    Biquad tsB_, tsM_, tsT_;   // post-amp half of the tone stack (linear, so the knobs keep full authority)
+    double levelComp_ = 1.0;
     Oversampler4 os_;
     detail::Reverb rev_;
     double gate_env_ = 0.0, gka_ = 0.01, gkr_ = 0.001, gko_ = 0.01, gkc_ = 0.001;
@@ -1334,8 +1460,8 @@ inline int loadBoardPreset(PedalBoard& pb, const BoardPreset& bp) {
     pb.clear();
     for (const auto& s : bp.slots) {
         const PedalMeta* m = findMeta(s.key);
-        if (!m) continue;
-        StompPedal* p = pb.add(m->kind);
+        if (! m) continue;
+        StompPedal* p = pb.add(m);         // meta overload → handles customs too
         if (!p) break;
         p->post = s.post;
         for (const auto& kv : s.params) p->setParam(kv.first, kv.second);
@@ -1344,4 +1470,25 @@ inline int loadBoardPreset(PedalBoard& pb, const BoardPreset& bp) {
     return (int) pb.pedals.size();
 }
 
+// ── NEW: scan a folder for .mdpd files and register them all ──────────────
+inline int loadCustomPedalDir(const std::string& dirPath) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (! fs::is_directory(dirPath, ec)) return 0;
+    int n = 0;
+    for (auto& entry : fs::directory_iterator(dirPath, ec)) {
+        if (ec) break;
+        if (! entry.is_regular_file()) continue;
+        const auto ext = entry.path().extension().string();
+        if (ext != ".mdpd" && ext != ".MDPD") continue;
+        std::string err;
+        auto def = mdp::loadFile(entry.path().string(), err);
+        if (def) { registerCustomPedal(def); ++n; }
+    }
+    return n;
+}
+
 } // namespace ampsim
+#if defined(__clang__)
+ #pragma clang diagnostic pop
+#endif
